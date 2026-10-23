@@ -1110,6 +1110,82 @@ def _gene_job(job: tuple[str, list[str]]) -> dict[tuple[str, str], dict]:
     return out
 
 
+def _resident_gene_batch_job(jobs):
+    """Resident first-stage batches, then resident scores for every reached stage."""
+    from ..test_statistic.fold_change import estimate_log_fold_change
+    from ..test_statistic.resampling import PairResult, run_test_from_statistics
+
+    st = _WORKER_STATE
+    engine = st["resident_engine"]
+    ready, by_target, first, out = {}, {}, {}, {}
+    for gene_id, targets in jobs:
+        if gene_id in engine.force_cpu:
+            st["score_stats"]["sensitive_cpu_score_jobs"] += 1
+            out.update(_gene_job((gene_id, targets)))
+            continue
+        try:
+            y, mu = engine.host_inputs(
+                gene_id, st["response_matrix"], st["gene_row_index"][gene_id]
+            )
+            flat = engine.gene(gene_id, y)
+            ready[gene_id] = y, mu, flat, targets
+            for target_id in targets:
+                by_target.setdefault(target_id, []).append(gene_id)
+        except (RuntimeError, MemoryError) as exc:
+            st["score_stats"]["fallback_batches"] += 1
+            warnings.warn(
+                "Resident gene scores replayed on CPU: " + str(exc), RuntimeWarning, stacklevel=2
+            )
+            out.update(_gene_job((gene_id, targets)))
+    try:
+        for target_id, names in by_target.items():
+            target = st["target_precomps"][target_id]
+            values = engine.statistics(
+                target.draws.slice(0, st["B1"]),
+                [ready[g][2] for g in names],
+                (target_id, 0, st["B1"]),
+            )
+            for j, gene in enumerate(names):
+                first[gene, target_id] = values[j]
+        for gene, (y, mu, flat, targets) in ready.items():
+            for target_id in targets:
+                target = st["target_precomps"][target_id]
+                if not len(target.trt_idxs):
+                    result = PairResult(np.nan, np.nan, np.nan, np.nan, np.nan, None)
+                else:
+                    observed = engine.observed(flat, target.trt_idxs)
+                    fc, se = estimate_log_fold_change(y, mu, target.trt_idxs)
+
+                    def nulls(lo, hi, gene=gene, target_id=target_id, flat=flat, target=target):
+                        if lo == 0 and hi == st["B1"]:
+                            return first[gene, target_id]
+                        st["score_stats"]["gpu_later_stage_calls"] += 1
+                        return engine.statistics(
+                            target.draws.slice(lo, hi), [flat], (target_id, lo, hi)
+                        )[0]
+
+                    result = run_test_from_statistics(
+                        observed,
+                        fc,
+                        se,
+                        nulls,
+                        B1=st["B1"],
+                        B2=st["B2"],
+                        B3=st["B3"],
+                        fit_parametric_curve=st["fit_parametric_curve"],
+                        side_code=st["side_code"],
+                    )
+                out[gene, target_id] = _result_row(gene, target_id, result)
+    except (RuntimeError, MemoryError) as exc:
+        st["score_stats"]["fallback_batches"] += 1
+        warnings.warn(
+            "Resident batch scores replayed on CPU: " + str(exc), RuntimeWarning, stacklevel=2
+        )
+        for gene, (_, _, _, targets) in ready.items():
+            out.update(_gene_job((gene, targets)))
+    return out
+
+
 def _gene_batch_job(jobs):
     """Prepare a bounded gene batch once and supply unchanged first-stage tails."""
     from ..test_statistic.score_batch import ScoreBatch
@@ -1498,8 +1574,13 @@ def run_discovery_ntcells_complement(
     # results do not depend on target order or on which other targets are in
     # the run. See `target_seed_sequence`. Entropy is resolved once here so an
     # unseeded run still draws it a single time.
-    if score_backend not in ("cpu", "cpu_batch", "cuda_batch"):
-        raise ValueError("score_backend must be cpu, cpu_batch or cuda_batch")
+    if score_backend not in ("cpu", "cpu_batch", "cuda_batch", "cuda_resident"):
+        raise ValueError("score_backend must be cpu, cpu_batch, cuda_batch or cuda_resident")
+    if score_backend == "cuda_resident" and (
+        glm_solver != "outer" or resampling_mechanism != "crt" or grna_target_weights is not None
+    ):
+        raise ValueError("cuda_resident currently requires outer, unweighted complement CRT")
+    requested_score_backend = score_backend
     if score_backend != "cpu" and resolve_n_jobs(n_jobs) != 1:
         raise ValueError("Experimental batched scores require n_jobs=1")
     if not isinstance(score_batch_size, int) or score_batch_size < 1:
@@ -1543,21 +1624,40 @@ def run_discovery_ntcells_complement(
         None if isinstance(design, StructuredDesign) else x_outer_flat(covariate_matrix)
     )
 
-    gene_precomps = fit_all_genes(
-        response_matrix,
-        needed_gene_ids,
-        covariate_matrix,
-        x_outer_flat_shared=shared_x_outer,
-        design=design,
-        # One gene per BLAS call, so a fit depends on nothing but that gene.
-        # See `_GENE_BATCH_WIDTH`. The caller's `chunk_memory_gb` governs
-        # target chunking only, which is result-neutral under
-        # glm_solver="structured" and can move last bits under "outer".
-        chunk_memory_gb=_GENE_CHUNK_MEMORY_GB,
-        gene_rows=needed_gene_rows,
-        batch_width=_GENE_BATCH_WIDTH,
-        n_jobs=n_jobs,
-    )
+    resident_engine = None
+    if score_backend == "cuda_resident":
+        try:
+            from ..test_statistic.resident import ResidentEngine
+
+            resident_engine = ResidentEngine(covariate_matrix, score_max_bytes, score_stats)
+            gene_precomps = resident_engine.fit_genes(
+                response_matrix, needed_gene_ids, needed_gene_rows, score_batch_size
+            )
+        except (ImportError, OSError, ValueError, RuntimeError, MemoryError) as exc:
+            warnings.warn(
+                "Resident analysis declined; using reference CPU: " + str(exc),
+                RuntimeWarning,
+                stacklevel=2,
+            )
+            resident_engine = None
+            score_backend = "cpu"
+            score_stats["fallback_batches"] += 1
+    if resident_engine is None:
+        gene_precomps = fit_all_genes(
+            response_matrix,
+            needed_gene_ids,
+            covariate_matrix,
+            x_outer_flat_shared=shared_x_outer,
+            design=design,
+            # One gene per BLAS call, so a fit depends on nothing but that gene.
+            # See `_GENE_BATCH_WIDTH`. The caller's `chunk_memory_gb` governs
+            # target chunking only, which is result-neutral under
+            # glm_solver="structured" and can move last bits under "outer".
+            chunk_memory_gb=_GENE_CHUNK_MEMORY_GB,
+            gene_rows=needed_gene_rows,
+            batch_width=_GENE_BATCH_WIDTH,
+            n_jobs=n_jobs,
+        )
 
     pairs_by_target = {
         target_id: group for target_id, group in pairs.groupby("grna_target", observed=True)
@@ -1695,7 +1795,9 @@ def run_discovery_ntcells_complement(
     rows = _run_target_chunks(
         chunks,
         _prepare,
-        _gene_job if score_backend == "cpu" else _gene_batch_job,
+        _resident_gene_batch_job
+        if resident_engine is not None
+        else (_gene_job if score_backend == "cpu" else _gene_batch_job),
         pairs_by_gene,
         dict(
             response_matrix=response_matrix,
@@ -1711,6 +1813,7 @@ def run_discovery_ntcells_complement(
             score_backend=score_backend,
             score_max_bytes=score_max_bytes,
             score_stats=score_stats,
+            resident_engine=resident_engine,
         ),
         n_jobs,
         gene_batch_size=1
@@ -1732,13 +1835,27 @@ def run_discovery_ntcells_complement(
         for row in pairs_by_target[target_id].itertuples(index=False)
     ]
     frame = pd.DataFrame(ordered, columns=_RESULT_COLUMNS)
-    if score_backend != "cpu":
+    if requested_score_backend != "cpu":
         frame.attrs["score_execution"] = dict(
-            requested=score_backend,
+            requested=requested_score_backend,
+            effective=score_backend,
             batch_size=score_batch_size,
             max_bytes=score_max_bytes,
             **score_stats,
         )
+    if resident_engine is not None:
+        frame.attrs["resident_fits"] = {
+            g: dict(
+                coefs=f.fitted_coefs.tolist(),
+                theta=float(f.theta),
+                theta_method=int(f.theta_method),
+                theta_clamped=bool(f.theta_clamped),
+                glm_converged=bool(f.glm_converged),
+                min_eigenvalue=float(f.min_eigenvalue),
+                max_eigenvalue=float(f.max_eigenvalue),
+            )
+            for g, f in gene_precomps.items()
+        }
     return frame
 
 
@@ -1838,7 +1955,7 @@ def _run_target_chunks(
             # concurrently would change every p-value, and chunk-parallelism would
             # multiply `chunk_memory_gb` by the worker count instead of sharing one
             # chunk's draws.
-            if gene_job is _gene_batch_job:
+            if gene_job in (_gene_batch_job, _resident_gene_batch_job):
                 gene_jobs.sort(key=lambda job: tuple(job[1]))
             _WORKER_STATE.update(shared_state, target_precomps=target_precomps, score_bank_cache={})
             mapped_jobs = (
@@ -1850,7 +1967,7 @@ def _run_target_chunks(
                 ]
             )
             # Batch jobs are lists even when the memory gate permits one gene.
-            if gene_job is _gene_batch_job and gene_batch_size == 1:
+            if gene_job in (_gene_batch_job, _resident_gene_batch_job) and gene_batch_size == 1:
                 mapped_jobs = [[job] for job in gene_jobs]
             for produced in _map_jobs(gene_job, mapped_jobs, gene_n_jobs, backend=gene_backend):
                 rows.update(produced)

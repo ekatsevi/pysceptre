@@ -107,6 +107,38 @@ def run_low_level_test_full(
         # A degenerate statistic exceeds no null value, which would read as p = 1/(B+1).
         return PairResult(np.nan, z_orig, fc, se, np.nan, None)
 
+    return run_test_from_statistics(
+        z_orig,
+        fc,
+        se,
+        nulls,
+        B1=B1,
+        B2=B2,
+        B3=B3,
+        fit_parametric_curve=fit_parametric_curve,
+        side_code=side_code,
+        p_thresh=p_thresh,
+        return_resampling_dist=return_resampling_dist,
+    )
+
+
+def run_test_from_statistics(
+    z_orig,
+    fc,
+    se,
+    nulls,
+    *,
+    B1=499,
+    B2=4999,
+    B3=0,
+    fit_parametric_curve=True,
+    side_code=0,
+    p_thresh=P_THRESH,
+    return_resampling_dist=False,
+) -> PairResult:
+    """The unchanged adaptive test, independent of where scores were computed."""
+    if not np.isfinite(z_orig):
+        return PairResult(np.nan, z_orig, fc, se, np.nan, None)
     sn_params: tuple[float, float, float] | None = None
     stage = 1
     null_statistics = nulls(0, B1)

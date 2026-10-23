@@ -480,6 +480,7 @@ def _run_discovery(
     else:
         result = run_discovery_nt_cells(**engine_args, nt_cells=nt_cells)
     score_execution = result.attrs.get("score_execution")
+    resident_fits = result.attrs.get("resident_fits")
     if not per_guide:
         return result
 
@@ -495,6 +496,8 @@ def _run_discovery(
     result = sort_like_r(result)
     if score_execution is not None:
         result.attrs["score_execution"] = score_execution
+    if resident_fits is not None:
+        result.attrs["resident_fits"] = resident_fits
     return result
 
 
@@ -806,6 +809,8 @@ def run_power_check(
     result = merge_qc_failures(tested, annotated)
     if "score_execution" in tested.attrs:
         result.attrs["score_execution"] = tested.attrs["score_execution"]
+    if "resident_fits" in tested.attrs:
+        result.attrs["resident_fits"] = tested.attrs["resident_fits"]
     return result
 
 
