@@ -119,3 +119,28 @@ larger-memory GPU a prerequisite while most of the available B200 is unused.
 Measure each complete public family against both the existing reference and
 an optimized multicore CPU baseline. Component gains do not establish an
 end-to-end gain, and the current experiment does not establish 10x or 100x.
+
+## New bounded implementation evidence
+
+The isolated prototypes now make two of these changes concrete:
+
+- Full B200, four actual target probability vectors, two comparisons per
+  target, 201158 cells and 5498 draws: complete sparse-bank generation
+  16.82–27.08x faster than the single pinned CPU reference, with every bank
+  membership and final RNG state identical. Compilation/device initialization,
+  probability fitting, verification download and the rest of inference are
+  outside those component timings; host planning/upload and cursor transfers
+  are included. Job 9379139 completed successfully.
+- A 45-GB B200 slice, 32 actual response genes: integer-count reciprocal-table
+  dispersion MLE took 4.289/4.084 ms warm versus CPU 413.481 ms, with maximum
+  theta difference 1.4496e-12. Counts/means are already resident; upload,
+  diagnostic output and downstream tests are excluded. The first invocation
+  including JIT took 10.141 s. Only these MLE cases are checked, not the
+  MM/pilot/fractional/near-Poisson paths or full-family decisions. Job 9379276
+  completed successfully.
+
+Code, retained notices, exact scope and reproduction harnesses are under
+`tools/gpu/native-lab/`. These are research prototypes separate from the public
+resident backend, not silently enabled replacements. Their public-workflow
+integration and the next complete-family comparison remain uncompleted.
+The existing measured whole-process gain remains 1.251x.

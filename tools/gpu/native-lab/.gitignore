@@ -1,0 +1,5 @@
+/receipts/
+__pycache__/
+/cupy-cache/
+*.json
+slurm-*.out
