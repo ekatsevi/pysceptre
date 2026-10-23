@@ -1110,6 +1110,116 @@ def _gene_job(job: tuple[str, list[str]]) -> dict[tuple[str, str], dict]:
     return out
 
 
+def _gene_batch_job(jobs):
+    """Prepare a bounded gene batch once and supply unchanged first-stage tails."""
+    from ..test_statistic.score_batch import ScoreBatch
+    from ..test_statistic.score_stat import compute_observed_full_statistic
+
+    st = _WORKER_STATE
+    prepared = []
+    for gene_id, targets_here in jobs:
+        gene = st["gene_precomps"][gene_id]
+        y = _get_row(st["response_matrix"], st["gene_row_index"][gene_id])
+        pieces = compute_precomputation_pieces(
+            y, st["covariate_matrix"], gene.fitted_coefs, gene.theta
+        )
+        stacked = stack_pieces(pieces.a, pieces.w, pieces.D)
+        prefix = None
+        perms = st["permutations"]
+        if perms is not None:
+            demand = sum(len(st["target_precomps"][t].trt_idxs) for t in targets_here)
+            if prefix_scan_pays(demand, perms.shape[1]):
+                prefix = PermutationPrefixSums(stacked, perms)
+        prepared.append((gene_id, targets_here, y, pieces, stacked, prefix))
+    width = prepared[0][4].shape[1]
+    by_target = {}
+    for i, (_, targets_here, _, pieces, _, prefix) in enumerate(prepared):
+        for target_id in targets_here:
+            target = st["target_precomps"][target_id]
+            if prefix is not None:
+                st["score_stats"]["cpu_prefix_pairs"] += 1
+                continue
+            if target.trt_weights is not None:
+                st["score_stats"]["cpu_weighted_pairs"] += 1
+                continue
+            if len(target.trt_idxs) and np.isfinite(
+                compute_observed_full_statistic(pieces.a, pieces.w, pieces.D, target.trt_idxs)
+            ):
+                by_target.setdefault(target_id, []).append(i)
+    first = {}
+    try:
+        flat = (
+            np.ascontiguousarray(np.concatenate([p[4] for p in prepared], axis=1))
+            if by_target
+            else None
+        )
+        batch = (
+            ScoreBatch(
+                flat,
+                width,
+                st["score_backend"],
+                max_bytes=st["score_max_bytes"],
+                telemetry=st["score_stats"],
+                bank_cache=st.get("score_bank_cache"),
+            )
+            if by_target
+            else None
+        )
+        for target_id, positions in by_target.items():
+            bank = st["target_precomps"][target_id].draws.slice(0, st["B1"])
+            values = batch.statistics(bank, positions, cache_key=target_id)
+            for row, i in enumerate(positions):
+                first[(i, target_id)] = values[row]
+    except (ImportError, OSError, RuntimeError, MemoryError) as exc:
+        st["score_stats"]["fallback_batches"] += 1
+        warnings.warn(
+            "Batched score backend declined; using existing CPU scores: " + str(exc),
+            RuntimeWarning,
+            stacklevel=2,
+        )
+        out = {}
+        for job in jobs:
+            out.update(_gene_job(job))
+        return out
+    finally:
+        # Device buffers are not attached to results or fitted-model caches.
+        batch = None
+    out = {}
+    for i, (gene_id, targets_here, y, pieces, stacked, prefix) in enumerate(prepared):
+        for target_id in targets_here:
+            target = st["target_precomps"][target_id]
+            if prefix is not None:
+                provider = partial(_prefix_nulls, prefix, len(target.trt_idxs))
+            else:
+                cached = first.get((i, target_id))
+
+                def provider(lo, hi, cached=cached):
+                    if lo == 0 and hi == st["B1"]:
+                        return cached
+                    st["score_stats"]["cpu_later_stage_requests"] += 1
+                    return None
+
+            result = run_low_level_test_full(
+                y=y,
+                mu=pieces.mu,
+                a=pieces.a,
+                w=pieces.w,
+                D=pieces.D,
+                trt_idxs=target.trt_idxs,
+                synthetic_idxs=target.draws,
+                stacked=stacked,
+                B1=st["B1"],
+                B2=st["B2"],
+                B3=st["B3"],
+                fit_parametric_curve=st["fit_parametric_curve"],
+                side_code=st["side_code"],
+                null_statistics_fn=provider,
+                trt_weights=target.trt_weights,
+            )
+            out[(gene_id, target_id)] = _result_row(gene_id, target_id, result)
+    return out
+
+
 _RESULT_COLUMNS = [
     "response_id",
     "grna_target",
@@ -1350,6 +1460,9 @@ def run_discovery_ntcells_complement(
     permutation_width: int | None = None,
     grna_target_weights: dict[str, np.ndarray] | None = None,
     glm_solver: str = "outer",
+    score_backend: str = "cpu",
+    score_batch_size: int = 8,
+    score_max_bytes: int = 512 * 1024**2,
 ) -> pd.DataFrame:
     """pairs: DataFrame with columns 'response_id', 'grna_target' -- the
     QC-passed pairs to test. Returns a DataFrame with one row per pair:
@@ -1385,6 +1498,27 @@ def run_discovery_ntcells_complement(
     # results do not depend on target order or on which other targets are in
     # the run. See `target_seed_sequence`. Entropy is resolved once here so an
     # unseeded run still draws it a single time.
+    if score_backend not in ("cpu", "cpu_batch", "cuda_batch"):
+        raise ValueError("score_backend must be cpu, cpu_batch or cuda_batch")
+    if score_backend != "cpu" and resolve_n_jobs(n_jobs) != 1:
+        raise ValueError("Experimental batched scores require n_jobs=1")
+    if not isinstance(score_batch_size, int) or score_batch_size < 1:
+        raise ValueError("score_batch_size must be a positive integer")
+    if not isinstance(score_max_bytes, int) or score_max_bytes < 1:
+        raise ValueError("score_max_bytes must be a positive integer")
+    score_stats = dict(
+        score_matmuls=0,
+        gpu_matmuls=0,
+        score_columns=0,
+        uploaded_score_bytes=0,
+        uploaded_draw_bytes=0,
+        downloaded_score_bytes=0,
+        peak_pool_reserved_bytes=0,
+        fallback_batches=0,
+        cpu_prefix_pairs=0,
+        cpu_weighted_pairs=0,
+        cpu_later_stage_requests=0,
+    )
     _check_pairs(pairs, gene_ids, grna_target_cells)
     entropy = resolve_entropy(seed)
 
@@ -1561,7 +1695,7 @@ def run_discovery_ntcells_complement(
     rows = _run_target_chunks(
         chunks,
         _prepare,
-        _gene_job,
+        _gene_job if score_backend == "cpu" else _gene_batch_job,
         pairs_by_gene,
         dict(
             response_matrix=response_matrix,
@@ -1574,8 +1708,21 @@ def run_discovery_ntcells_complement(
             B3=B3,
             fit_parametric_curve=fit_parametric_curve,
             side_code=side_code,
+            score_backend=score_backend,
+            score_max_bytes=score_max_bytes,
+            score_stats=score_stats,
         ),
         n_jobs,
+        gene_batch_size=1
+        if score_backend == "cpu"
+        else min(
+            score_batch_size,
+            max(
+                1,
+                score_max_bytes
+                // (covariate_matrix.shape[0] * 8 * (2 * covariate_matrix.shape[1] + 6)),
+            ),
+        ),
     )
     # Emit in the original target-major order, so inverting the loops above is
     # not observable in the output.
@@ -1584,7 +1731,15 @@ def run_discovery_ntcells_complement(
         for target_id in target_ids_needed
         for row in pairs_by_target[target_id].itertuples(index=False)
     ]
-    return pd.DataFrame(ordered, columns=_RESULT_COLUMNS)
+    frame = pd.DataFrame(ordered, columns=_RESULT_COLUMNS)
+    if score_backend != "cpu":
+        frame.attrs["score_execution"] = dict(
+            requested=score_backend,
+            batch_size=score_batch_size,
+            max_bytes=score_max_bytes,
+            **score_stats,
+        )
+    return frame
 
 
 def _run_target_chunks(
@@ -1596,6 +1751,7 @@ def _run_target_chunks(
     n_jobs: int,
     gene_backend: str | None = None,
     gene_n_jobs: int | None = None,
+    gene_batch_size: int = 1,
 ) -> dict:
     """Test every pair one chunk of targets at a time, gene-outer within a chunk.
 
@@ -1682,8 +1838,21 @@ def _run_target_chunks(
             # concurrently would change every p-value, and chunk-parallelism would
             # multiply `chunk_memory_gb` by the worker count instead of sharing one
             # chunk's draws.
-            _WORKER_STATE.update(shared_state, target_precomps=target_precomps)
-            for produced in _map_jobs(gene_job, gene_jobs, gene_n_jobs, backend=gene_backend):
+            if gene_job is _gene_batch_job:
+                gene_jobs.sort(key=lambda job: tuple(job[1]))
+            _WORKER_STATE.update(shared_state, target_precomps=target_precomps, score_bank_cache={})
+            mapped_jobs = (
+                gene_jobs
+                if gene_batch_size == 1
+                else [
+                    gene_jobs[i : i + gene_batch_size]
+                    for i in range(0, len(gene_jobs), gene_batch_size)
+                ]
+            )
+            # Batch jobs are lists even when the memory gate permits one gene.
+            if gene_job is _gene_batch_job and gene_batch_size == 1:
+                mapped_jobs = [[job] for job in gene_jobs]
+            for produced in _map_jobs(gene_job, mapped_jobs, gene_n_jobs, backend=gene_backend):
                 rows.update(produced)
             _WORKER_STATE.clear()
 

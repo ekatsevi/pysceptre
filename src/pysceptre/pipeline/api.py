@@ -208,6 +208,9 @@ def run_discovery_analysis(
     resampling_mechanism: str | None = None,
     grna_target_weights: dict[str, np.ndarray] | None = None,
     glm_solver: str = "outer",
+    score_backend: str = "cpu",
+    score_batch_size: int = 8,
+    score_max_bytes: int = 512 * 1024**2,
 ) -> pd.DataFrame:
     """response_matrix: (n_genes, n_cells) dense ndarray or scipy.sparse matrix.
     gene_ids: row labels for response_matrix, in order.
@@ -310,6 +313,9 @@ def run_discovery_analysis(
         resampling_mechanism=resampling_mechanism,
         grna_target_weights=grna_target_weights,
         glm_solver=glm_solver,
+        score_backend=score_backend,
+        score_batch_size=score_batch_size,
+        score_max_bytes=score_max_bytes,
     )
 
 
@@ -345,6 +351,9 @@ def _run_discovery(
     permutation_width: int | None = None,
     grna_target_weights: dict[str, np.ndarray] | None = None,
     glm_solver: str = "outer",
+    score_backend: str = "cpu",
+    score_batch_size: int = 8,
+    score_max_bytes: int = 512 * 1024**2,
 ) -> pd.DataFrame:
     """`run_discovery_analysis` once the settings are resolved.
 
@@ -422,6 +431,8 @@ def _run_discovery(
             )
         engine_pairs = pairs
 
+    if score_backend != "cpu" and nt_cells is not None:
+        raise ValueError("Batched score backends currently require complement controls")
     side_code = _SIDE_CODES[side]
     fit_parametric_curve = resampling_approximation == "skew_normal"
     B2, B3 = _resampling_budget(
@@ -462,9 +473,13 @@ def _run_discovery(
             permutation_width=permutation_width,
             grna_target_weights=grna_target_weights,
             glm_solver=glm_solver,
+            score_backend=score_backend,
+            score_batch_size=score_batch_size,
+            score_max_bytes=score_max_bytes,
         )
     else:
         result = run_discovery_nt_cells(**engine_args, nt_cells=nt_cells)
+    score_execution = result.attrs.get("score_execution")
     if not per_guide:
         return result
 
@@ -477,7 +492,10 @@ def _run_discovery(
     result = result.loc[:, front + [c for c in result.columns if c not in front]]
     if grna_integration_strategy == "bonferroni":
         result = aggregate_bonferroni(result)
-    return sort_like_r(result)
+    result = sort_like_r(result)
+    if score_execution is not None:
+        result.attrs["score_execution"] = score_execution
+    return result
 
 
 def run_calibration_check(
@@ -504,6 +522,9 @@ def run_calibration_check(
     resampling_mechanism: str | None = None,
     ntc_grna_weights: dict[str, np.ndarray] | None = None,
     glm_solver: str = "outer",
+    score_backend: str = "cpu",
+    score_batch_size: int = 8,
+    score_max_bytes: int = 512 * 1024**2,
 ) -> pd.DataFrame:
     """Run sceptre's calibration check: the discovery test over negative controls.
 
@@ -550,6 +571,8 @@ def run_calibration_check(
     control_group, resampling_mechanism = resolve_analysis_settings(
         moi, control_group, resampling_mechanism
     )
+    if score_backend != "cpu" and control_group == "nt_cells":
+        raise ValueError("Batched score backends currently require complement controls")
     if ntc_grna_weights is not None and control_group == "nt_cells":
         raise ValueError(
             "the dose test (ntc_grna_weights) runs with the complement control group only"
@@ -658,6 +681,9 @@ def run_calibration_check(
         permutation_width=permutation_width,
         grna_target_weights=synthetic_target_weights,
         glm_solver=glm_solver,
+        score_backend=score_backend,
+        score_batch_size=score_batch_size,
+        score_max_bytes=score_max_bytes,
     )
 
 
@@ -683,6 +709,9 @@ def run_power_check(
     resampling_mechanism: str | None = None,
     grna_target_weights: dict[str, np.ndarray] | None = None,
     glm_solver: str = "outer",
+    score_backend: str = "cpu",
+    score_batch_size: int = 8,
+    score_max_bytes: int = 512 * 1024**2,
 ) -> pd.DataFrame:
     """Run sceptre's power check: the discovery test over positive controls.
 
@@ -770,8 +799,14 @@ def run_power_check(
         resampling_mechanism=resampling_mechanism,
         grna_target_weights=grna_target_weights,
         glm_solver=glm_solver,
+        score_backend=score_backend,
+        score_batch_size=score_batch_size,
+        score_max_bytes=score_max_bytes,
     )
-    return merge_qc_failures(tested, annotated)
+    result = merge_qc_failures(tested, annotated)
+    if "score_execution" in tested.attrs:
+        result.attrs["score_execution"] = tested.attrs["score_execution"]
+    return result
 
 
 def run_trans_analysis(
