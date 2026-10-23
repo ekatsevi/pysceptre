@@ -1,0 +1,43 @@
+F                                                                        [100%]
+=================================== FAILURES ===================================
+____________ test_the_numeric_key_follows_kernels_not_the_cpu_model ____________
+
+    def test_the_numeric_key_follows_kernels_not_the_cpu_model():
+        fp = environment_fingerprint()
+        key = numeric_environment_key(fp)
+        assert numeric_environment_key(json.loads(json.dumps(fp))) == key
+    
+        def changed(**edits):
+            other = copy.deepcopy(fp)
+            other.update(edits)
+            return numeric_environment_key(other)
+    
+        same = [
+            changed(cpu_model="AMD EPYC 7502 32-Core Processor"),
+            changed(cpu_model=None),
+            changed(python="3.10.0", pysceptre="0.0.0"),
+            changed(blas=[{**e, "filename": "renamed.so"} for e in fp["blas"]]),
+            changed(blas=list(reversed(fp["blas"]))),
+        ]
+        assert all(k == key for k in same)
+    
+        features = [f for f in fp["numpy_cpu_features"] or [] if not f.startswith("AVX512")]
+        different = [
+            changed(numpy="0.0.0"),
+            changed(scipy="0.0.0"),
+            changed(numba="0.0.0"),
+            changed(have_numba=not fp["have_numba"]),
+            changed(blas=[{**e, "architecture": "SomethingElse"} for e in fp["blas"]]),
+            changed(blas=[{**e, "version": "0.0.0"} for e in fp["blas"]]),
+            changed(numpy_cpu_features=features + ["AVX512F", "AVX512_SKX"]),
+            changed(numpy_cpu_features=features),
+        ]
+        if not any(f.startswith("AVX512") for f in fp["numpy_cpu_features"] or []):
+            different.pop()  # removing AVX-512 changes nothing where there was none
+>       assert key not in different
+E       AssertionError: assert 'e29b26feab26dd223effcaf7d56127d99361c4786ace25650078df1fff12da1a' not in ['1c4b2f8f10df555ad105e1b309044fb74cc94a3274d7a3f5449a7655d84630a5', '3c048d8e4e9d598e7f5a0ea2fac991c40d73212b4e959759...caf7d56127d99361c4786ace25650078df1fff12da1a', 'e29b26feab26dd223effcaf7d56127d99361c4786ace25650078df1fff12da1a', ...]
+
+/tmp/pysceptre-gpu-clean-base/tests/validation/test_gene_fit_cache.py:537: AssertionError
+=========================== short test summary info ============================
+FAILED ../../../../../../tmp/pysceptre-gpu-clean-base/tests/validation/test_gene_fit_cache.py::test_the_numeric_key_follows_kernels_not_the_cpu_model
+1 failed in 1.46s

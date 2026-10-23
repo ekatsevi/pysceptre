@@ -51,6 +51,8 @@ dependencies = [
 [project.optional-dependencies]
 dev = ["pytest>=7.0", "ruff>=0.6", "pre-commit>=3.0"]
 fast = ["numba>=0.58"]
+# Experimental CUDA target fitting; install only the CuPy wheel for your CUDA family.
+gpu = ["cupy-cuda12x>=13.6,<14"]
 # Dev-only, for the scripts/ dataset-export and benchmark path: `mudata` reads
 # and writes the two-assay .h5mu input, `pyarrow` the result parquet, and
 # `matplotlib` draws the calibration QQ plot. Nothing under src/

@@ -1,0 +1,5 @@
+{
+  "passed": true,
+  "exact_fits": 32,
+  "scope": "Default CPU coefficients, fitted values, deviance, iterations and convergence; both families, vector/batch inputs, C/F designs in one runtime"
+}

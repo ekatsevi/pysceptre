@@ -108,11 +108,11 @@ def _as_2d(Y: np.ndarray) -> tuple[np.ndarray, bool]:
     return Y, False
 
 
-def _poisson_deviance(y: np.ndarray, mu: np.ndarray) -> np.ndarray:
+def _poisson_deviance(y: np.ndarray, mu: np.ndarray, _xp=np) -> np.ndarray:
     # 2 * sum(y*log(y/mu) - (y - mu)), with the convention y*log(y/mu) = 0 at y = 0
     with np.errstate(divide="ignore", invalid="ignore"):
-        term = np.where(y > 0, y * np.log(y / mu), 0.0)
-    return 2.0 * np.sum(term - (y - mu), axis=-1)
+        term = _xp.where(y > 0, y * _xp.log(y / mu), 0.0)
+    return 2.0 * _xp.sum(term - (y - mu), axis=-1)
 
 
 def _binomial_deviance(y: np.ndarray, mu: np.ndarray) -> np.ndarray:
@@ -122,7 +122,7 @@ def _binomial_deviance(y: np.ndarray, mu: np.ndarray) -> np.ndarray:
     return 2.0 * np.sum(t1 + t2, axis=-1)
 
 
-def _binomial_saturated(y: np.ndarray) -> np.ndarray:
+def _binomial_saturated(y: np.ndarray, _xp=np) -> np.ndarray:
     """The `y`-only half of the binomial deviance, which the IRLS loop never
     changes.
 
@@ -132,12 +132,16 @@ def _binomial_saturated(y: np.ndarray) -> np.ndarray:
     proportions.
     """
     with np.errstate(divide="ignore", invalid="ignore"):
-        t = np.where(y > 0, y * np.log(y), 0.0) + np.where(y < 1, (1 - y) * np.log1p(-y), 0.0)
-    return 2.0 * np.sum(t, axis=-1)
+        t = _xp.where(y > 0, y * _xp.log(y), 0.0) + _xp.where(y < 1, (1 - y) * _xp.log1p(-y), 0.0)
+    return 2.0 * _xp.sum(t, axis=-1)
 
 
 def _binomial_deviance_from_eta(
-    y: np.ndarray, mu: np.ndarray, eta: np.ndarray, saturated: np.ndarray
+    y: np.ndarray,
+    mu: np.ndarray,
+    eta: np.ndarray,
+    saturated: np.ndarray,
+    _xp=np,
 ) -> np.ndarray:
     """The same deviance, rearranged around quantities the loop already holds.
 
@@ -157,11 +161,15 @@ def _binomial_deviance_from_eta(
     the better-conditioned one. Agreement with the direct form was 1.66e-16
     relative.
     """
-    return saturated - 2.0 * (np.sum(np.log1p(-mu), axis=-1) + np.sum(y * eta, axis=-1))
+    return saturated - 2.0 * (_xp.sum(_xp.log1p(-mu), axis=-1) + _xp.sum(y * eta, axis=-1))
 
 
 def _batched_wls_solve(
-    X: np.ndarray, X_outer_flat: np.ndarray, w: np.ndarray, z: np.ndarray
+    X: np.ndarray,
+    X_outer_flat: np.ndarray,
+    w: np.ndarray,
+    z: np.ndarray,
+    _xp=np,
 ) -> np.ndarray:
     """Solve, for each of k columns, (X^T diag(w_k) X) beta_k = X^T diag(w_k) z_k.
 
@@ -186,7 +194,7 @@ def _batched_wls_solve(
     # same computation needs a transpose on each of A and b.
     A = (w @ X_outer_flat).reshape(-1, p, p)  # (k, n) @ (n, p*p) -> (k, p, p)
     b = (w * z) @ X  # (k, n) @ (n, p) -> (k, p)
-    return np.linalg.solve(A, b[:, :, None])[:, :, 0]  # (k, p)
+    return _xp.linalg.solve(A, b[:, :, None])[:, :, 0]  # (k, p)
 
 
 def x_outer_flat(X: np.ndarray) -> np.ndarray:
@@ -217,6 +225,7 @@ def _fit_batch(
     maxit: int = _MAXIT,
     X_outer_flat: np.ndarray | None = None,
     mu_floor: float = _MU_FLOOR,
+    _xp=np,
 ) -> GlmFitBatchResult:
     n, p = X.shape
     Y, was_1d = _as_2d(Y)
@@ -239,22 +248,22 @@ def _fit_batch(
         #
         # This is a starting point, not a change of estimand: IRLS converges
         # to the same MLE either way, to the same tolerance.
-        rate = np.clip(Y.mean(axis=1, keepdims=True), _MU_FLOOR, 1.0 - _MU_FLOOR)
-        mu = np.broadcast_to(rate, Y.shape).copy()
+        rate = _xp.clip(Y.mean(axis=1, keepdims=True), _MU_FLOOR, 1.0 - _MU_FLOOR)
+        mu = _xp.broadcast_to(rate, Y.shape).copy()
         deviance_fn = _binomial_deviance
     else:
         raise ValueError(f"unsupported family: {family}")
 
-    eta = np.log(mu) if family == "poisson" else np.log(mu / (1 - mu))
-    saturated = None if family == "poisson" else _binomial_saturated(Y)
-    dev_old = np.full(k, np.inf)
-    converged = np.zeros(k, dtype=bool)
-    n_iter = np.zeros(k, dtype=int)
-    beta = np.zeros((k, p))
+    eta = _xp.log(mu) if family == "poisson" else _xp.log(mu / (1 - mu))
+    saturated = None if family == "poisson" else _binomial_saturated(Y, _xp=_xp)
+    dev_old = _xp.full(k, _xp.inf)
+    converged = _xp.zeros(k, dtype=bool)
+    n_iter = _xp.zeros(k, dtype=int)
+    beta = _xp.zeros((k, p))
     # Depends only on X, so a caller that fits repeatedly against the same
     # design matrix should build it once with `x_outer_flat` and pass it in.
     if X_outer_flat is None:
-        X_outer_flat = x_outer_flat(X)
+        X_outer_flat = (X[:, :, None] * X[:, None, :]).reshape(n, p * p)
 
     # `mu` is carried forward as loop state (rather than recomputed via exp(eta)
     # at the top of every iteration) and every elementwise op below is
@@ -264,7 +273,7 @@ def _fit_batch(
     # redundantly recomputes exp(eta) == mu twice per iteration.
     for it in range(1, maxit + 1):
         active = ~converged
-        n_active = int(np.sum(active))
+        n_active = int(_xp.sum(active))
         if n_active == 0:
             break
         all_active = n_active == k  # avoid a full-array fancy-index *copy* in
@@ -289,22 +298,22 @@ def _fit_batch(
         w_a = (dmu_deta_a**2) / var_a
         z_a = eta_a + (Y_a - mu_a) / dmu_deta_a
 
-        beta_a = _batched_wls_solve(X, X_outer_flat, w_a, z_a)
+        beta_a = _batched_wls_solve(X, X_outer_flat, w_a, z_a, _xp=_xp)
         eta_new_a = beta_a @ X.T  # (k_a, p) @ (p, n) -> (k_a, n)
 
         mu_new_a = (
-            np.clip(np.exp(eta_new_a), mu_floor, None)
+            _xp.clip(_xp.exp(eta_new_a), mu_floor, None)
             if family == "poisson"
-            else np.clip(1.0 / (1.0 + np.exp(-eta_new_a)), _MU_FLOOR, 1 - _MU_FLOOR)
+            else _xp.clip(1.0 / (1.0 + _xp.exp(-eta_new_a)), _MU_FLOOR, 1 - _MU_FLOOR)
         )
         if family == "poisson":
-            dev_new_a = deviance_fn(Y_a, mu_new_a)
+            dev_new_a = deviance_fn(Y_a, mu_new_a, _xp=_xp)
         else:
             sat_a = saturated if all_active else saturated[active]
-            dev_new_a = _binomial_deviance_from_eta(Y_a, mu_new_a, eta_new_a, sat_a)
+            dev_new_a = _binomial_deviance_from_eta(Y_a, mu_new_a, eta_new_a, sat_a, _xp=_xp)
 
         dev_old_a = dev_old if all_active else dev_old[active]
-        newly_converged_a = np.abs(dev_new_a - dev_old_a) / (np.abs(dev_new_a) + 0.1) < eps
+        newly_converged_a = _xp.abs(dev_new_a - dev_old_a) / (_xp.abs(dev_new_a) + 0.1) < eps
 
         if all_active:
             beta[:, :] = beta_a

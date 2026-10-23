@@ -525,7 +525,7 @@ def iter_trans_analysis(
     side_code = _SIDE_CODES[side]
     B2, B3 = _SKEW_NORMAL_B2, 0
 
-    design = _design_for(glm_solver, covariate_matrix)
+    design = _design_for(glm_solver, covariate_matrix, n_jobs=n_jobs)
     if hasattr(gene_fits, "fingerprint"):
         _check_data(
             gene_fits.fingerprint,

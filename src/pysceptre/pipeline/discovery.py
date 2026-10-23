@@ -43,6 +43,7 @@ from scipy import sparse
 
 from ..crt.permutations import nested_permutation_draws, permutation_draws
 from ..crt.sampler import crt_index_sampler
+from ..glm.cuda import CudaTargetDesign
 from ..glm.design import StructuredDesign, redundant_columns, structured_design
 from ..glm.irls import (
     fit_binomial_glm_batch,
@@ -303,7 +304,7 @@ def _gene_fit_job(job: tuple[int, list[str], list[int]]) -> dict[str, GenePrecom
         for j, row in enumerate(chunk_rows):
             Y[j] = _get_row(response_matrix, row)
 
-    if design is None:
+    if design is None or isinstance(design, CudaTargetDesign):
         fit = fit_poisson_glm_batch(covariate_matrix, Y, X_outer_flat=xo)
         coefs, fitted, converged = fit.coefs, fit.fitted_values, fit.converged
     else:
@@ -318,7 +319,7 @@ def _gene_fit_job(job: tuple[int, list[str], list[int]]) -> dict[str, GenePrecom
         theta_est, method = estimate_theta(y=y_j, mu=fitted[j], dfr=dfr)
         lo, hi = _THETA_BOUNDS
         theta = max(min(theta_est, hi), lo)
-        if design is None:
+        if design is None or isinstance(design, CudaTargetDesign):
             # Built here only to read off the conditioning diagnostics, then
             # dropped -- see GenePrecomputation. It is rebuilt per gene per
             # target chunk in run_discovery_ntcells_complement.
@@ -422,7 +423,7 @@ def fit_all_genes(
         # Built once by the caller and shared by every fit; see
         # `glm.irls.x_outer_flat`. Inherited by forked workers, shared by
         # threads, so it crosses no boundary either way.
-        x_outer_flat=None if design is not None else x_outer_flat_shared,
+        x_outer_flat=None if isinstance(design, StructuredDesign) else x_outer_flat_shared,
         design=design,
     )
     out: dict[str, GenePrecomputation] = {}
@@ -740,7 +741,12 @@ def fit_all_targets(
     # discarded work is a dense fit over all 3,026 tested targets x 567,690
     # cells, taken a chunk at a time.
     fitted_values = None
-    if permutations is None and design is not None:
+    if permutations is None and isinstance(design, CudaTargetDesign):
+        Y = np.zeros((len(target_ids), n_cells))
+        for k, target_id in enumerate(target_ids):
+            Y[k, grna_target_cells[target_id]] = 1.0
+        fitted_values = design.fit(Y, X_outer_flat=x_outer_flat_shared).fitted_values
+    elif permutations is None and design is not None:
         fitted_values = np.empty((len(target_ids), n_cells))
 
         def fit_one(k: int) -> None:
@@ -1303,13 +1309,19 @@ def _one_analysis_at_a_time(engine):
     return serialized
 
 
-GLM_SOLVERS = ("outer", "structured")
+GLM_SOLVERS = ("outer", "structured", "cuda_targets")
 
 
-def _design_for(glm_solver: str, covariate_matrix: np.ndarray) -> StructuredDesign | None:
+def _design_for(
+    glm_solver: str, covariate_matrix: np.ndarray, *, n_jobs: int = 1
+) -> StructuredDesign | CudaTargetDesign | None:
     """The structured design for `glm_solver="structured"`, None for 0.5.0's outer-product IRLS."""
     if glm_solver not in GLM_SOLVERS:
         raise ValueError(f"glm_solver must be one of {GLM_SOLVERS}, got {glm_solver!r}")
+    if glm_solver == "cuda_targets":
+        if resolve_n_jobs(n_jobs) != 1:
+            raise ValueError("Experimental cuda_targets requires n_jobs=1")
+        return CudaTargetDesign(covariate_matrix)
     if glm_solver != "structured":
         return None
     warm_compiled_sums()
@@ -1392,8 +1404,10 @@ def run_discovery_ntcells_complement(
     # this is the only part of the IRLS setup that depends on nothing else.
     # See `glm.irls.x_outer_flat`. The structured solver needs neither it nor
     # chunk-mates; see docs/design.md, "Indicator columns in the IRLS".
-    design = _design_for(glm_solver, covariate_matrix)
-    shared_x_outer = None if design is not None else x_outer_flat(covariate_matrix)
+    design = _design_for(glm_solver, covariate_matrix, n_jobs=n_jobs)
+    shared_x_outer = (
+        None if isinstance(design, StructuredDesign) else x_outer_flat(covariate_matrix)
+    )
 
     gene_precomps = fit_all_genes(
         response_matrix,

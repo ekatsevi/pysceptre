@@ -1,0 +1,102 @@
+........................................................................ [ 10%]
+.....................sssssssss.......................................... [ 21%]
+......................................s................................. [ 32%]
+........................................................................ [ 42%]
+............................F........................................... [ 53%]
+........................................................................ [ 64%]
+........................................................................ [ 74%]
+s....................................................................... [ 85%]
+................................................ss...................... [ 96%]
+.........................                                                [100%]
+=================================== FAILURES ===================================
+____________ test_the_numeric_key_follows_kernels_not_the_cpu_model ____________
+
+    def test_the_numeric_key_follows_kernels_not_the_cpu_model():
+        fp = environment_fingerprint()
+        key = numeric_environment_key(fp)
+        assert numeric_environment_key(json.loads(json.dumps(fp))) == key
+    
+        def changed(**edits):
+            other = copy.deepcopy(fp)
+            other.update(edits)
+            return numeric_environment_key(other)
+    
+        same = [
+            changed(cpu_model="AMD EPYC 7502 32-Core Processor"),
+            changed(cpu_model=None),
+            changed(python="3.10.0", pysceptre="0.0.0"),
+            changed(blas=[{**e, "filename": "renamed.so"} for e in fp["blas"]]),
+            changed(blas=list(reversed(fp["blas"]))),
+        ]
+        assert all(k == key for k in same)
+    
+        features = [f for f in fp["numpy_cpu_features"] or [] if not f.startswith("AVX512")]
+        different = [
+            changed(numpy="0.0.0"),
+            changed(scipy="0.0.0"),
+            changed(numba="0.0.0"),
+            changed(have_numba=not fp["have_numba"]),
+            changed(blas=[{**e, "architecture": "SomethingElse"} for e in fp["blas"]]),
+            changed(blas=[{**e, "version": "0.0.0"} for e in fp["blas"]]),
+            changed(numpy_cpu_features=features + ["AVX512F", "AVX512_SKX"]),
+            changed(numpy_cpu_features=features),
+        ]
+        if not any(f.startswith("AVX512") for f in fp["numpy_cpu_features"] or []):
+            different.pop()  # removing AVX-512 changes nothing where there was none
+>       assert key not in different
+E       AssertionError: assert 'e29b26feab26dd223effcaf7d56127d99361c4786ace25650078df1fff12da1a' not in ['1c4b2f8f10df555ad105e1b309044fb74cc94a3274d7a3f5449a7655d84630a5', '3c048d8e4e9d598e7f5a0ea2fac991c40d73212b4e959759...caf7d56127d99361c4786ace25650078df1fff12da1a', 'e29b26feab26dd223effcaf7d56127d99361c4786ace25650078df1fff12da1a', ...]
+
+/tmp/sceptre-gpu-sources/pysceptre/tests/validation/test_gene_fit_cache.py:537: AssertionError
+=============================== warnings summary ===============================
+tests/validation/test_analytical_power_inputs.py::test_normalised_mean_is_the_uncentred_normalisation
+  /tmp/sceptre-gpu-sources/pysceptre/tests/validation/test_analytical_power_inputs.py:81: UserWarning: baseline_expression_stats returns a SIZE-FACTOR-NORMALISED mean, which is not the scale compute_power expects: that function's var_nb is the variance of the raw counts and its QC factor asks how many cells hold a nonzero count. On day0 this mean is 16% below the right one, which understates power. Use baseline_expression_stats_from_fits unless you are deliberately reproducing the published comparison.
+    stats = baseline_expression_stats(m, gene_ids, np.ones(case["n_genes"]))
+
+tests/validation/test_analytical_power_inputs.py::test_a_gene_that_is_zero_everywhere_does_not_poison_the_factors
+  /tmp/sceptre-gpu-sources/pysceptre/tests/validation/test_analytical_power_inputs.py:111: UserWarning: baseline_expression_stats returns a SIZE-FACTOR-NORMALISED mean, which is not the scale compute_power expects: that function's var_nb is the variance of the raw counts and its QC factor asks how many cells hold a nonzero count. On day0 this mean is 16% below the right one, which understates power. Use baseline_expression_stats_from_fits unless you are deliberately reproducing the published comparison.
+    stats = baseline_expression_stats(m, gene_ids, np.ones(mixed["n_genes"]))
+
+tests/validation/test_analytical_power_inputs.py::test_subsetting_the_output_is_not_subsetting_the_input
+  /tmp/sceptre-gpu-sources/pysceptre/tests/validation/test_analytical_power_inputs.py:145: UserWarning: baseline_expression_stats returns a SIZE-FACTOR-NORMALISED mean, which is not the scale compute_power expects: that function's var_nb is the variance of the raw counts and its QC factor asks how many cells hold a nonzero count. On day0 this mean is 16% below the right one, which understates power. Use baseline_expression_stats_from_fits unless you are deliberately reproducing the published comparison.
+    full = baseline_expression_stats(sparse.csc_matrix(dense), gene_ids, thetas, gene_subset=wanted)
+
+tests/validation/test_analytical_power_inputs.py::test_subsetting_the_output_is_not_subsetting_the_input
+  /tmp/sceptre-gpu-sources/pysceptre/tests/validation/test_analytical_power_inputs.py:146: UserWarning: baseline_expression_stats returns a SIZE-FACTOR-NORMALISED mean, which is not the scale compute_power expects: that function's var_nb is the variance of the raw counts and its QC factor asks how many cells hold a nonzero count. On day0 this mean is 16% below the right one, which understates power. Use baseline_expression_stats_from_fits unless you are deliberately reproducing the published comparison.
+    presubset = baseline_expression_stats(sparse.csc_matrix(dense[:2]), gene_ids[:2], thetas[:2])
+
+tests/validation/test_analytical_power_inputs.py::test_theta_comes_through_by_gene_id_and_a_gap_is_refused
+  /tmp/sceptre-gpu-sources/pysceptre/tests/validation/test_analytical_power_inputs.py:157: UserWarning: baseline_expression_stats returns a SIZE-FACTOR-NORMALISED mean, which is not the scale compute_power expects: that function's var_nb is the variance of the raw counts and its QC factor asks how many cells hold a nonzero count. On day0 this mean is 16% below the right one, which understates power. Use baseline_expression_stats_from_fits unless you are deliberately reproducing the published comparison.
+    stats = baseline_expression_stats(
+
+tests/validation/test_analytical_power_inputs.py::test_theta_comes_through_by_gene_id_and_a_gap_is_refused
+  /tmp/sceptre-gpu-sources/pysceptre/tests/validation/test_analytical_power_inputs.py:162: UserWarning: baseline_expression_stats returns a SIZE-FACTOR-NORMALISED mean, which is not the scale compute_power expects: that function's var_nb is the variance of the raw counts and its QC factor asks how many cells hold a nonzero count. On day0 this mean is 16% below the right one, which understates power. Use baseline_expression_stats_from_fits unless you are deliberately reproducing the published comparison.
+    baseline_expression_stats(sparse.csc_matrix(dense), gene_ids, {"a": 1.0})
+
+tests/validation/test_discovery_pipeline.py::test_orchestration_matches_r_deterministic_fields_for_null_pairs
+  /tmp/sceptre-gpu-sources/pysceptre/src/pysceptre/pipeline/discovery.py:1406: UserWarning: degenerate gene fits out of 4: 1 where the dispersion MLE failed and fell back to pilot estimate. Call pysceptre.pipeline.discovery.summarize_gene_fits for the affected gene ids.
+    gene_precomps = fit_all_genes(
+
+tests/validation/test_discovery_pipeline.py::test_orchestration_detects_strong_signal_end_to_end
+  /tmp/sceptre-gpu-sources/pysceptre/src/pysceptre/pipeline/discovery.py:1406: UserWarning: degenerate gene fits out of 5: 1 where the dispersion MLE failed and fell back to pilot estimate. Call pysceptre.pipeline.discovery.summarize_gene_fits for the affected gene ids.
+    gene_precomps = fit_all_genes(
+
+tests/validation/test_gene_chunking.py::test_end_to_end_results_agree_across_gene_chunk_budgets
+  /tmp/sceptre-gpu-sources/pysceptre/src/pysceptre/pipeline/discovery.py:1492: UserWarning: reducing target_chunk_size from 200 to 1 to stay within chunk_memory_gb=1e-09: each target needs about 1.79 MB (32.00 kB of dense binomial-fit arrays over 400 cells, plus 1.76 MB of resamples for B1+B2+B3 = 5,498). Chunk size affects peak memory and batching width; under glm_solver='outer' the batching width can also move the last bits of a target's fit. At target_chunk_size=1 each target is processed alone, which is slow, and peak memory runs several times the figure above while a draw is being built, so this run may still exhaust memory. This is usually resampling_approximation='no_approximation', whose B3 grows as n_pairs / multiple_testing_alpha; 'skew_normal' needs a few MB of draws per target instead.
+    chunks = reference_fit_chunks(
+
+tests/validation/test_low_moi_vs_r.py::test_the_engine_on_rs_draws_reproduces_every_unit_pair
+  /tmp/sceptre-gpu-sources/pysceptre/src/pysceptre/pipeline/discovery.py:1307: UserWarning: degenerate pair fits out of 15: 1 where the dispersion MLE failed and fell back to pilot estimate. Affected (gene, target) pairs include [('gene_3', 'target_2')].
+    return engine(*args, **kwargs)
+
+tests/validation/test_resampling_budget.py::test_no_approximation_runs_end_to_end_and_never_reports_stage_2
+  /tmp/sceptre-gpu-sources/pysceptre/src/pysceptre/pipeline/discovery.py:1406: UserWarning: degenerate gene fits out of 2: 2 where the dispersion MLE failed and fell back to pilot estimate. Call pysceptre.pipeline.discovery.summarize_gene_fits for the affected gene ids.
+    gene_precomps = fit_all_genes(
+
+tests/validation/test_resampling_budget.py::test_no_approximation_resolves_p_at_the_b3_resolution
+  /tmp/sceptre-gpu-sources/pysceptre/src/pysceptre/pipeline/discovery.py:1406: UserWarning: degenerate gene fits out of 2: 1 where the dispersion MLE failed and fell back to pilot estimate. Call pysceptre.pipeline.discovery.summarize_gene_fits for the affected gene ids.
+    gene_precomps = fit_all_genes(
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+FAILED ../../../../../../tmp/sceptre-gpu-sources/pysceptre/tests/validation/test_gene_fit_cache.py::test_the_numeric_key_follows_kernels_not_the_cpu_model
+1 failed, 659 passed, 17 skipped, 109 deselected, 12 warnings in 102.39s (0:01:42)

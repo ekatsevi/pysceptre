@@ -212,7 +212,7 @@ def fit_gene_cache(
             f"e.g. {repeated[:5]}"
         )
 
-    design = _discovery._design_for(glm_solver, covariate_matrix)
+    design = _discovery._design_for(glm_solver, covariate_matrix, n_jobs=n_jobs)
     fits = _discovery.fit_all_genes(
         response_matrix,
         ids,

@@ -1,0 +1,12 @@
+{
+  "base": "7adaa9f5fda12e0cf87df972c8fe73b73ef13e7d",
+  "archive_sha256": "1ac9a978b8a40df8dfe5784909bb9796175b7059c56eb0b35e4b065853a5e762",
+  "files": {
+    "src/pysceptre/glm/cuda.py": "8f5ac929c503c1f1176886cc93f8d7e8a2aedade0e0a591b679c34ea9005e846",
+    "src/pysceptre/glm/irls.py": "b4a1adde7106173a4a7b726edaf1b36a7915708beacc6d4b750af3e69fad7270",
+    "src/pysceptre/pipeline/discovery.py": "6d0221ceef4e7085bd8baa8e9295182f33ca565812435289d811602f3d9ae47a",
+    "src/pysceptre/pipeline/gene_cache.py": "82e4570b583514fa4ae2cf3a69afff972d9102dd3564a31611aa889fca4160b9",
+    "src/pysceptre/pipeline/trans.py": "1d862b021dc8657230758bb912d64087f30bd3c94f134937bea0d05fa4c20449",
+    "tests/validation/test_cuda_targets.py": "a469d9f6679b4b59d0c5510ec8de232fb8b897a0a178a6f6e59f1a42efe5b0bb"
+  }
+}
