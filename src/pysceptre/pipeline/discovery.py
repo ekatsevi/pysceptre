@@ -364,6 +364,7 @@ def fit_all_genes(
     n_jobs: int = 1,
     x_outer_flat_shared: np.ndarray | None = None,
     design: StructuredDesign | None = None,
+    backend: str | None = None,
 ) -> dict[str, GenePrecomputation]:
     """Batched Poisson IRLS across genes (they share the full covariate
     matrix), then per-gene theta estimation and precomputation pieces.
@@ -428,7 +429,7 @@ def fit_all_genes(
     )
     out: dict[str, GenePrecomputation] = {}
     try:
-        for produced in _map_jobs(_gene_fit_job, jobs, n_jobs):
+        for produced in _map_jobs(_gene_fit_job, jobs, n_jobs, backend=backend):
             out.update(produced)
     finally:
         _GENE_FIT_STATE.clear()

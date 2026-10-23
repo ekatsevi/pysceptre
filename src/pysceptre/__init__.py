@@ -30,6 +30,8 @@ from .pipeline.api import (
     run_power_check,
     run_trans_analysis,
 )
+from .pipeline.cartesian import iter_cartesian_analysis
+from .pipeline.cartesian_crt import iter_cartesian_crt_analysis
 from .specificity import run_specificity_check
 
 try:
@@ -50,5 +52,7 @@ __all__ = [
     "run_power_check",
     "run_specificity_check",
     "run_trans_analysis",
+    "iter_cartesian_analysis",
+    "iter_cartesian_crt_analysis",
     "__version__",
 ]
