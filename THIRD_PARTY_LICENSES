@@ -151,3 +151,23 @@ cell's gRNA UMIs as `compute_cell_covariates` computes them); `api.py` the
   Upstream:  https://github.com/Katsevich-Lab/sceptre
   Authors:   Timothy Barry, Eugene Katsevich
   Licence:   GPL-3
+
+
+NumPy / PCG (experimental native CUDA sampler)
+---------------------------------------------
+
+`src/pysceptre/crt/native/rng.cu` uses NumPy's exponential Ziggurat tables and
+adapts its sampling algorithm, together with PCG64 XSL-RR transition/output
+logic. The original NumPy and PCG notices are retained alongside that source
+in LICENSE-NumPy.txt and LICENSE-PCG.txt and included as package data.
+
+  Sources: https://github.com/numpy/numpy/tree/v2.5.4/numpy/random/src
+           https://github.com/numpy/numpy/tree/v2.4.6/numpy/random/src
+  NumPy licence: BSD-3-Clause (see retained notice)
+  PCG licence: MIT (relicensed May 2019; see retained notice)
+
+The PCG64 header and Ziggurat constants are byte-identical between these
+tags, as are the exponential and geometric-inversion functions used here.
+The cluster runtime for the reported native integration is NumPy 2.4.6;
+local CPU validation uses NumPy 2.5.4. The experimental sampler refuses
+other versions and retains reference replay for unsupported cases.

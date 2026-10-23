@@ -135,6 +135,7 @@ def run_test_from_statistics(
     side_code=0,
     p_thresh=P_THRESH,
     return_resampling_dist=False,
+    skew_normal_fn=None,
 ) -> PairResult:
     """The unchanged adaptive test, independent of where scores were computed."""
     if not np.isfinite(z_orig):
@@ -148,7 +149,7 @@ def run_test_from_statistics(
         sn_fit_used = False
         if fit_parametric_curve:
             null_statistics = nulls(B1, B1 + B2)
-            sn_result = fit_and_evaluate_skew_normal(z_orig, null_statistics, side_code)
+            sn_result = (skew_normal_fn or fit_and_evaluate_skew_normal)(z_orig, null_statistics, side_code)
             p = sn_result.p
             sn_fit_used = sn_result.used
             if sn_fit_used:

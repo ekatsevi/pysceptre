@@ -658,8 +658,14 @@ def _target_draw_job(job: tuple[int, int, str]) -> tuple[str, TargetPrecomputati
         weights = None
     if perms is None:
         rng = np.random.default_rng(target_seed_sequence(st["seed"], target_id))
-        synthetic_idxs = crt_index_sampler(fitted_probabilities, st["B_total"], rng, len(trt_idxs))
-        if weights is None:
+        if st.get("native_engine") is not None:
+            draws = st["native_engine"].sample(fitted_probabilities, st["B_total"], rng, len(trt_idxs))
+            synthetic_idxs = None
+        else:
+            synthetic_idxs = crt_index_sampler(fitted_probabilities, st["B_total"], rng, len(trt_idxs))
+        if synthetic_idxs is None:
+            pass
+        elif weights is None:
             draws = ListDraws(synthetic_idxs, st["n_cells"])
         else:
             # The dose test: each placed cell takes a weight drawn from the target's own
@@ -704,6 +710,7 @@ def fit_all_targets(
     x_outer_flat_shared: np.ndarray | None = None,
     grna_target_weights: dict[str, np.ndarray] | None = None,
     design: StructuredDesign | None = None,
+    native_engine=None,
 ) -> dict[str, TargetPrecomputation]:
     """Per-target resamples, plus the logistic fit the CRT draws them from.
 
@@ -797,6 +804,7 @@ def fit_all_targets(
         seed=seed,
         B_total=B1 + B2 + B3,
         n_cells=n_cells,
+        native_engine=native_engine,
     )
     out: dict[str, TargetPrecomputation] = {}
     try:
@@ -1108,6 +1116,11 @@ def _gene_job(job: tuple[str, list[str]]) -> dict[tuple[str, str], dict]:
         )
         out[(gene_id, target_id)] = _result_row(gene_id, target_id, result)
     return out
+
+
+def _native_gene_batch_job(jobs):
+    from ..test_statistic.native_schedule import run_jobs
+    return run_jobs(jobs, _WORKER_STATE, _gene_job, _result_row)
 
 
 def _resident_gene_batch_job(jobs):
@@ -1574,9 +1587,9 @@ def run_discovery_ntcells_complement(
     # results do not depend on target order or on which other targets are in
     # the run. See `target_seed_sequence`. Entropy is resolved once here so an
     # unseeded run still draws it a single time.
-    if score_backend not in ("cpu", "cpu_batch", "cuda_batch", "cuda_resident"):
+    if score_backend not in ("cpu", "cpu_batch", "cuda_batch", "cuda_resident", "cuda_native"):
         raise ValueError("score_backend must be cpu, cpu_batch, cuda_batch or cuda_resident")
-    if score_backend == "cuda_resident" and (
+    if score_backend in ("cuda_resident", "cuda_native") and (
         glm_solver != "outer" or resampling_mechanism != "crt" or grna_target_weights is not None
     ):
         raise ValueError("cuda_resident currently requires outer, unweighted complement CRT")
@@ -1625,11 +1638,16 @@ def run_discovery_ntcells_complement(
     )
 
     resident_engine = None
-    if score_backend == "cuda_resident":
+    if score_backend in ("cuda_resident", "cuda_native"):
         try:
             from ..test_statistic.resident import ResidentEngine
 
-            resident_engine = ResidentEngine(covariate_matrix, score_max_bytes, score_stats)
+            if score_backend == "cuda_native":
+                from ..test_statistic.native_resident import NativeEngine
+                Engine = NativeEngine
+            else:
+                Engine = ResidentEngine
+            resident_engine = Engine(covariate_matrix, score_max_bytes, score_stats)
             gene_precomps = resident_engine.fit_genes(
                 response_matrix, needed_gene_ids, needed_gene_rows, score_batch_size
             )
@@ -1787,6 +1805,7 @@ def run_discovery_ntcells_complement(
             # the machine. The draws inside a prepare are the only part that
             # maps, and they are a small share of it.
             n_jobs=prep_draw_jobs,
+            **({"native_engine": resident_engine} if score_backend == "cuda_native" else {}),
             permutations=permutations,
             x_outer_flat_shared=shared_x_outer,
             design=design,
@@ -1795,7 +1814,7 @@ def run_discovery_ntcells_complement(
     rows = _run_target_chunks(
         chunks,
         _prepare,
-        _resident_gene_batch_job
+        (_native_gene_batch_job if score_backend == "cuda_native" else _resident_gene_batch_job)
         if resident_engine is not None
         else (_gene_job if score_backend == "cpu" else _gene_batch_job),
         pairs_by_gene,
@@ -1955,7 +1974,7 @@ def _run_target_chunks(
             # concurrently would change every p-value, and chunk-parallelism would
             # multiply `chunk_memory_gb` by the worker count instead of sharing one
             # chunk's draws.
-            if gene_job in (_gene_batch_job, _resident_gene_batch_job):
+            if gene_job in (_gene_batch_job, _resident_gene_batch_job, _native_gene_batch_job):
                 gene_jobs.sort(key=lambda job: tuple(job[1]))
             _WORKER_STATE.update(shared_state, target_precomps=target_precomps, score_bank_cache={})
             mapped_jobs = (
@@ -1967,7 +1986,7 @@ def _run_target_chunks(
                 ]
             )
             # Batch jobs are lists even when the memory gate permits one gene.
-            if gene_job in (_gene_batch_job, _resident_gene_batch_job) and gene_batch_size == 1:
+            if gene_job in (_gene_batch_job, _resident_gene_batch_job, _native_gene_batch_job) and gene_batch_size == 1:
                 mapped_jobs = [[job] for job in gene_jobs]
             for produced in _map_jobs(gene_job, mapped_jobs, gene_n_jobs, backend=gene_backend):
                 rows.update(produced)
@@ -1976,6 +1995,7 @@ def _run_target_chunks(
             del target_precomps  # free this chunk's synthetic_idxs before the next one
 
     finally:
+        _WORKER_STATE.clear()
         if prefetch is not None:
             # Cancel any in-flight prepare on the way out, including on an
             # exception, so a failed run does not wait on a chunk nobody

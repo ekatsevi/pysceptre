@@ -141,6 +141,8 @@ The isolated prototypes now make two of these changes concrete:
 
 Code, retained notices, exact scope and reproduction harnesses are under
 `tools/gpu/native-lab/`. These are research prototypes separate from the public
-resident backend, not silently enabled replacements. Their public-workflow
-integration and the next complete-family comparison remain uncompleted.
-The existing measured whole-process gain remains 1.251x.
+resident backend, not silently enabled replacements. At that snapshot their public-workflow integration was uncompleted. The
+subsequent opt-in `cuda_native` integration and clean complete-family
+measurements are documented in [the native integration report](gpu-native-integration.md):
+3.862x fresh-process wall time and approximately 10–12x warmed public throughput
+on the bounded workload. The earlier 1.251x result remains separately archived.

@@ -35,7 +35,10 @@ integer saturation need further general validation. It does not implement
 the approximate sampler, weighted draws, arbitrary NumPy versions or other
 bit generators. Do not install this as an automatic sampler replacement.
 
-Tests run under NumPy 2.5.4, CuPy 13.6, CUDA 12.8.1 on B200 hardware:
+Tests ran under NumPy **2.4.6** on the cluster (2.5.4 was the fetched source
+tag), CuPy 13.6, CUDA 12.8.1 on B200 hardware. Owning-source verification
+confirmed identical PCG64 headers/tables and relevant exponential/geometric
+functions between those NumPy tags. Local CPU validation uses 2.5.4:
 
 - Raw words matched at 1/255/256/257/100003/1000000-word boundaries for four
   seeds. Exponential decoding preserved final RNG states for four seeds and

@@ -105,3 +105,6 @@ ignore = ["E501"]
 [tool.ruff.format]
 indent-style = "space"
 exclude = ["*.md"]
+
+[tool.setuptools.package-data]
+"pysceptre.crt.native" = ["*.cu", "LICENSE-*.txt"]

@@ -113,6 +113,7 @@ class ResidentEngine:
         for start in range(0, len(ids), width):
             names = ids[start : start + width]
             y = np.array([_get_row(response_matrix, r) for r in rows[start : start + width]])
+            native_theta = native_safe = None
             try:
                 dy = cp.asarray(y)
                 self.stats["uploaded_count_bytes"] += y.nbytes
@@ -120,6 +121,8 @@ class ResidentEngine:
                 beta_host, mu_host, ok_host = cp.asnumpy(beta), cp.asnumpy(mu), cp.asnumpy(ok)
                 if not np.all(np.isfinite(beta_host)) or not np.all(np.isfinite(mu_host)):
                     raise ResidentDeclined("Nonfinite device response fit")
+                if hasattr(self, "theta_batch"):
+                    native_theta, native_safe = self.theta_batch(y, dy, mu)
                 self.stats["response_gpu_batches"] += 1
                 self.stats["downloaded_mean_bytes"] += mu_host.nbytes
             except (ValueError, RuntimeError, MemoryError) as exc:
@@ -132,10 +135,14 @@ class ResidentEngine:
             for j, gene in enumerate(names):
                 cpu = beta_host is None or not ok_host[j]
                 if not cpu:
-                    theta_est, method = estimate_theta(y[j], mu_host[j], n - p)
+                    if native_theta is None:
+                        theta_est, method = estimate_theta(y[j], mu_host[j], n - p)
+                    else:
+                        theta_est, method = native_theta[j], 1
+                        cpu = not native_safe[j]
                     # Sensitive boundary/fallback genes replay the original fit
                     # as well as original theta. Never apply the guide tolerance.
-                    cpu = method != 1 or not np.isfinite(theta_est) or not 0.01 < theta_est < 1000
+                    cpu = cpu or method != 1 or not np.isfinite(theta_est) or not 0.01 < theta_est < 1000
                 if cpu:
                     ref = fit_poisson_glm_batch(self.host_X, y[j], X_outer_flat=self.host_outer)
                     coeff, mean, converged = ref.coefs, ref.fitted_values, bool(ref.converged)
