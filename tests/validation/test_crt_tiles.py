@@ -89,6 +89,13 @@ def test_coalesced_scores_and_fused_counts_match_original_csr(packed):
         wanted = expected.reshape(-1, 35)[order]
         np.testing.assert_allclose(query.get(), wanted, rtol=1e-12, atol=1e-12)
         assert not unsafe.get().any()
+        parallel_draws, draw_guard = collection.statistics_queries(
+            atlas, query_gene[order], query_target[order], 2, 37, strategy="draw"
+        )
+        np.testing.assert_array_equal(
+            parallel_draws.get().view(np.uint64), query.get().view(np.uint64)
+        )
+        np.testing.assert_array_equal(draw_guard.get(), unsafe.get())
         with pytest.raises(MemoryError):
             collection.statistics_queries(atlas, query_gene, query_target, 2, 37, max_bytes=1)
         z = rng.normal(size=(3, len(chosen)))

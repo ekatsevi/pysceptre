@@ -106,6 +106,31 @@ extern "C" __global__ void queries(const unsigned long long* banks,const unsigne
  double variance=q-projection,z=s/sqrt(variance);output[(long long)r*count+slot]=z;
  if(!isfinite(z)||fabs(variance)<=1e-10*(fabs(q)+fabs(projection)))atomicOr(guard+slot,1u);
 }
+extern "C" __global__ void draw_queries(const unsigned long long* banks,const unsigned long long* pointers,const int* bits,const int* targets,const int* genes,const double* aw,const double* inverse,const double* X,int cells,int lo,int draws,int chunks,double* output,unsigned int* guard){
+ int r=(blockIdx.x%chunks)*256+threadIdx.x,slot=blockIdx.x/chunks;
+ if(r>=draws)return;
+ int physical=genes[slot],target=targets[slot];
+ const unsigned int* data=(const unsigned int*)banks[target];
+ const long long* offsets=(const long long*)pointers[target];
+ const double* a=aw+(long long)(physical/32)*2*cells*32;int gl=physical%32;
+ double s=0,q=0,u[P];
+ #pragma unroll
+ for(int k=0;k<P;k++)u[k]=0;
+ for(long long j=offsets[lo+r];j<offsets[lo+r+1];j++){
+  int c=cell_at(data,j,bits[target]);double w=a[((long long)cells+c)*32+gl];
+  s+=a[(long long)c*32+gl];q+=w;
+  #pragma unroll
+  for(int k=0;k<P;k++)u[k]+=w*X[(long long)c*P+k];
+ }
+ double projection=0;
+ #pragma unroll
+ for(int k=0;k<P;k++){
+  #pragma unroll
+  for(int l=0;l<P;l++)projection+=u[k]*inverse[((long long)physical*P+k)*P+l]*u[l];
+ }
+ double variance=q-projection,z=s/sqrt(variance);output[(long long)slot*draws+r]=z;
+ if(!isfinite(z)||fabs(variance)<=1e-10*(fabs(q)+fabs(projection)))atomicOr(guard+slot,1u);
+}
 """
 
 
@@ -193,6 +218,7 @@ class CompactScoreAtlas:
         self.put = module.get_function("put_planes")
         self.kernel = module.get_function("scores")
         self.query_kernel = module.get_function("queries")
+        self.draw_query_kernel = module.get_function("draw_queries")
 
     @property
     def nbytes(self):
@@ -322,9 +348,13 @@ class PackedDrawCollection:
         out, _, _, guard, _, _ = self._run(atlas, lo, hi, selected, None, None, False)
         return out.transpose(0, 2, 1), guard
 
-    def statistics_queries(self, atlas, gene, target, lo, hi, *, max_bytes=1024**3):
+    def statistics_queries(
+        self, atlas, gene, target, lo, hi, *, max_bytes=1024**3, strategy="grouped"
+    ):
         """Compact requested pairs into one distribution batch, preserving query order."""
         cp = self.cp
+        if strategy not in ("grouped", "draw"):
+            raise ValueError("Unknown compact CRT query strategy")
         gene, target = np.asarray(gene), np.asarray(target)
         if (
             gene.ndim != 1
@@ -347,6 +377,31 @@ class PackedDrawCollection:
         draws, count = hi - lo, len(gene)
         if not isinstance(max_bytes, int) or max_bytes < 1 or draws * count * 8 > max_bytes:
             raise MemoryError("Requested compact null batch exceeds max_bytes")
+        if strategy == "draw":
+            output, guard = cp.empty((count, draws)), cp.zeros(count, cp.uint32)
+            if draws and count:
+                chunks = (draws + 255) // 256
+                atlas.draw_query_kernel(
+                    (chunks * count,),
+                    (256,),
+                    (
+                        self.data,
+                        self.offsets,
+                        self.bits,
+                        cp.asarray(target, dtype=cp.int32),
+                        cp.asarray(gene, dtype=cp.int32),
+                        atlas.aw,
+                        atlas.inverse,
+                        atlas.X,
+                        np.int32(atlas.cells),
+                        np.int32(lo),
+                        np.int32(draws),
+                        np.int32(chunks),
+                        output,
+                        guard,
+                    ),
+                )
+            return output, guard
         named, counts = np.unique(target, return_counts=True)
         width = int(counts.max()) if count else 0
         slots = np.full((len(named), width), -1, np.int32)

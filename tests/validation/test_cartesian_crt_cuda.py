@@ -10,7 +10,8 @@ from pysceptre.pipeline.discovery import fit_all_targets, run_discovery_ntcells_
 
 @pytest.mark.parametrize("precompute,tail", [("cpu", "cpu"), ("cuda", "cuda")])
 @pytest.mark.parametrize("parametric,B3", [(True, 0), (True, 299), (False, 299)])
-def test_complete_crt_and_reference_draws(precompute, tail, parametric, B3):
+@pytest.mark.parametrize("query_strategy", ["grouped", "draw"])
+def test_complete_crt_and_reference_draws(precompute, tail, parametric, B3, query_strategy):
     cp = pytest.importorskip("cupy")
     if not cp.cuda.runtime.getDeviceCount():
         pytest.skip("CUDA required")
@@ -61,6 +62,7 @@ def test_complete_crt_and_reference_draws(precompute, tail, parametric, B3):
         target_chunk_size=2,
         precompute_backend=precompute,
         tail_backend=tail,
+        query_strategy=query_strategy,
         fit_parametric_curve=parametric,
         **kw,
     )

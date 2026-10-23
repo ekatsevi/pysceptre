@@ -62,6 +62,7 @@ def iter_cartesian_crt_analysis(
     fit_backend="cpu",
     precompute_backend="cpu",
     tail_backend="cpu",
+    query_strategy="grouped",
     target_chunk_size=200,
     chunk_memory_gb=1.0,
     device_max_bytes=150 * 1024**3,
@@ -86,7 +87,9 @@ def iter_cartesian_crt_analysis(
     Compact a,w planes and inverse information matrices are retained for all
     selected genes. Each output tile reuses every resident bank. First-stage
     counts are fused, and later distributions are materialized only for active
-    pairs, one target at a time. The caller must apply correction to the whole
+    pairs in bounded batches. `query_strategy="draw"` places independent draws
+    of one pair in adjacent lanes, retaining each score's listing order;
+    `"grouped"` places genes together. The caller must apply correction to the whole
     family after collecting all output. Checkpoint skipping happens after
     refitting the complete selected gene cohort.
 
@@ -123,6 +126,8 @@ def iter_cartesian_crt_analysis(
         v not in ("cpu", "cuda") for v in (precompute_backend, tail_backend)
     ):
         raise ValueError("Unknown model, precomputation or tail backend")
+    if query_strategy not in ("grouped", "draw"):
+        raise ValueError("Unknown compact CRT query strategy")
     if fit_backend == "cpu_fork" and (
         not sys.platform.startswith("linux") or "cupy" in sys.modules or "torch" in sys.modules
     ):
@@ -171,6 +176,7 @@ def iter_cartesian_crt_analysis(
         B2=B2,
         B3=B3,
         packed_draws=bool(packed_draws),
+        query_strategy=query_strategy,
         stage_counts={1: 0, 2: 0, 3: 0},
         replay_pairs=0,
         emitted_pairs=0,
@@ -358,7 +364,9 @@ def iter_cartesian_crt_analysis(
             gg, tt = ag[first : first + batch_pairs], at[first : first + batch_pairs]
             second = unsafe = None
             if fit_parametric_curve:
-                second, unsafe = collection.statistics_queries(atlas, selected[gg], tt, B1, B1 + B2)
+                second, unsafe = collection.statistics_queries(
+                    atlas, selected[gg], tt, B1, B1 + B2, strategy=query_strategy
+                )
                 slots = np.arange(len(gg))
                 fn = shared_skew_normal_cuda if tail_backend == "cuda" else shared_skew_normal
                 tp, _, danger = fn(
@@ -374,14 +382,19 @@ def iter_cartesian_crt_analysis(
                 fg, ft = gg[failed], tt[failed]
                 if B3:
                     final, final_guard = collection.statistics_queries(
-                        atlas, selected[fg], ft, B1 + B2, B1 + B2 + B3
+                        atlas,
+                        selected[fg],
+                        ft,
+                        B1 + B2,
+                        B1 + B2 + B3,
+                        strategy=query_strategy,
                     )
                     final_slots = np.arange(len(fg))
                 elif fit_parametric_curve:
                     final, final_guard, final_slots = second, unsafe, failed
                 else:
                     final, final_guard = collection.statistics_queries(
-                        atlas, selected[fg], ft, 0, B1
+                        atlas, selected[fg], ft, 0, B1, strategy=query_strategy
                     )
                     final_slots = np.arange(len(fg))
                 pp, danger = pool.empirical(

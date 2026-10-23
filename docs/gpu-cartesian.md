@@ -28,6 +28,10 @@ Collect the complete intended family before correction. The helper functions in
 positions and provide global Benjamini-Hochberg adjustment. Explicit NaNs remain
 recorded; its default multiplier excludes NaNs, as R's default `p.adjust` does.
 No correction is applied separately to iterator batches.
+`global_bh_cuda` explicitly selects CUDA sorting and prefix minima after
+complete-family collection. Its default returns adjusted values to CPU;
+`return_device=True` keeps them on CUDA. `max_bytes` checks a conservative
+work-array estimate before uploading the family, not total process memory.
 
 ## Computation and memory
 
@@ -46,12 +50,20 @@ atlas through the inverse-information variance formula. CUDA warps traverse
 genes together, reusing draw listings with contiguous accesses. The first stage
 counts empirical exceedances without materializing its score rectangle. Later
 stages batch active pairs into bounded distribution arrays.
+`query_strategy="draw"` schedules adjacent lanes over draws of the same active
+pair, retaining the listing order within every score and writing contiguous
+distribution rows. The default `"grouped"` strategy schedules genes together.
+Both consume the identical target-specific listings.
 
 The CRT persistent storage bound includes its compact atlas and packed banks.
 It excludes CUDA runtime state, allocator reserves and temporary workspaces.
 Estimated or actual capacity violations raise. This route requires enough device
 memory for the supplied family; a streaming bank implementation is future work.
 Permutation tiles require substantially less resident storage.
+The CRT route currently permits at most 16 design columns and int32 cell
+positions. Its CPU fits still materialize the dense cell-by-covariate outer
+products. Large categorical designs therefore require further work even when
+the compact GPU score atlas fits in device memory.
 
 ## Models, numerical checks and checkpoints
 
@@ -80,5 +92,5 @@ cohort. The consumer owns atomic persistence, source/settings identity checks
 and whole-family completeness validation. `on_fit` exposes small fitted-model
 records and `on_bank` on CRT supports independent draw auditing.
 
-Quality control remains a CPU boundary. These iterators consume its eligibility
-mask; no GPU QC method is selected or introduced.
+Pairwise quality control remains a CPU boundary. These iterators consume its
+eligibility mask; no GPU pairwise QC method is selected or introduced.
